@@ -373,6 +373,66 @@ func (bn *Binance) placeOrder(amount, price string, pair CurrencyPair, orderType
 		OrderTime:  ToInt(respmap["transactTime"])}, nil
 }
 
+func (bn *Binance) placeMarketOrder(amount, quoteOrderQty string, pair CurrencyPair, orderType, orderSide string) (*Order, error) {
+	path := bn.apiV3 + ORDER_URI
+	params := url.Values{}
+	params.Set("symbol", pair.ToSymbol(""))
+	params.Set("side", orderSide)
+	params.Set("type", "MARKET")
+	params.Set("newOrderRespType", "RESULT")
+
+	// amount, quoteOrderQty 二选一
+	if amount != "" && quoteOrderQty == "" {
+		params.Set("quantity", amount)
+	} else if amount == "" && quoteOrderQty != "" {
+		params.Set("quoteOrderQty", quoteOrderQty)
+	} else {
+		return nil, errors.New("Invalid quantity or quoteOrderQty!")
+	}
+
+	bn.buildParamsSigned(&params)
+
+	resp, err := HttpPostForm2(bn.httpClient, path, params,
+		map[string]string{"X-MBX-APIKEY": bn.accessKey})
+	if err != nil {
+		return nil, err
+	}
+
+	respmap := make(map[string]interface{})
+	err = json.Unmarshal(resp, &respmap)
+	if err != nil {
+		return nil, err
+	}
+
+	orderId := ToInt(respmap["orderId"])
+	if orderId <= 0 {
+		return nil, errors.New(string(resp))
+	}
+
+	side := BUY
+	if orderSide == "SELL" {
+		side = SELL
+	}
+
+	dealAmount := ToFloat64(respmap["executedQty"])
+	cummulativeQuoteQty := ToFloat64(respmap["cummulativeQuoteQty"])
+	avgPrice := 0.0
+	if cummulativeQuoteQty > 0 && dealAmount > 0 {
+		avgPrice = cummulativeQuoteQty / dealAmount
+	}
+
+	return &Order{
+		Currency:   pair,
+		OrderID:    orderId,
+		OrderID2:   strconv.Itoa(orderId),
+		Amount:     ToFloat64(amount),
+		DealAmount: dealAmount,
+		AvgPrice:   avgPrice,
+		Side:       TradeSide(side),
+		Status:     ORDER_UNFINISH,
+		OrderTime:  ToInt(respmap["transactTime"])}, nil
+}
+
 func (bn *Binance) GetAccount() (*Account, error) {
 	params := url.Values{}
 	bn.buildParamsSigned(&params)
@@ -410,12 +470,20 @@ func (bn *Binance) LimitSell(amount, price string, currencyPair CurrencyPair, op
 	return bn.placeOrder(amount, price, currencyPair, "LIMIT", "SELL")
 }
 
-func (bn *Binance) MarketBuy(amount, price string, currencyPair CurrencyPair) (*Order, error) {
-	return bn.placeOrder(amount, price, currencyPair, "MARKET", "BUY")
+//func (bn *Binance) MarketBuy(amount, price string, currencyPair CurrencyPair) (*Order, error) {
+//	return bn.placeOrder(amount, price, currencyPair, "MARKET", "BUY")
+//}
+//
+//func (bn *Binance) MarketSell(amount, price string, currencyPair CurrencyPair) (*Order, error) {
+//	return bn.placeOrder(amount, price, currencyPair, "MARKET", "SELL")
+//}
+
+func (bn *Binance) MarketBuy(amount, quoteOrderQty string, currencyPair CurrencyPair) (*Order, error) {
+	return bn.placeMarketOrder(amount, quoteOrderQty, currencyPair, "MARKET", "BUY")
 }
 
-func (bn *Binance) MarketSell(amount, price string, currencyPair CurrencyPair) (*Order, error) {
-	return bn.placeOrder(amount, price, currencyPair, "MARKET", "SELL")
+func (bn *Binance) MarketSell(amount, quoteOrderQty string, currencyPair CurrencyPair) (*Order, error) {
+	return bn.placeMarketOrder(amount, quoteOrderQty, currencyPair, "MARKET", "SELL")
 }
 
 func (bn *Binance) CancelOrder(orderId string, currencyPair CurrencyPair) (bool, error) {
